@@ -1,0 +1,51 @@
+# Root level gitignore for IBM SkillBridge AI project
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv
+*.db
+*.sqlite3
+
+# Node
+node_modules/
+.next/
+out/
+build/
+
+# Environment files
+.env
+.env.local
+.env*.local
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Build artifacts
+dist/
+build/
+
+# Uploads and temporary data
+uploads/
+chroma_data/
+
+# Testing
+.pytest_cache/
+coverage/
+htmlcov/
+.coverage
