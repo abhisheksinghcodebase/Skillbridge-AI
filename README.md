@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # SkillBridge AI 🚀
 
 **AI-Powered Career Mentoring Platform for Students and Fresh Graduates**
@@ -234,3 +235,6 @@ For support, email abhisheksinghcodebase@gmail.com or open an issue on GitHub.
 ---
 
 ⭐ **Star this repo if you find it helpful!** ⭐
+=======
+# Skillbridge-AI
+>>>>>>> 65bb7092805ad9e79d6d3466ddc2be257a4de85c
