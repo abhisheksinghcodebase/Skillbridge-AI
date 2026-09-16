@@ -98,6 +98,20 @@ class TestResumeAnalysis:
         mock_groq.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_analyze_resume_falls_back_to_text_aware_analysis(self):
+        """The service should still produce a valid analysis even when Groq is unavailable or returns markdown."""
+        resume_text = "Python Developer with FastAPI, PostgreSQL, Docker, and AWS experience."
+
+        result = await resume_service.analyze_resume(resume_text)
+
+        assert "resume_score" in result
+        assert "ats_score" in result
+        assert "strong_skills" in result
+        assert isinstance(result["strong_skills"], list)
+        assert "Python" in result["strong_skills"]
+        assert "FastAPI" in result["strong_skills"]
+
+    @pytest.mark.asyncio
     async def test_analyze_resume_with_short_text_returns_mock(self):
         """Test that short or empty text returns mock analysis."""
         result = await resume_service.analyze_resume("")
