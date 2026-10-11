@@ -1,12 +1,11 @@
 """
-Chat router: AI mentor conversation with Server-Sent Events streaming.
+Chat router: AI mentor conversation with Server-Sent Events streaming using MongoDB.
 """
 import json
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.database import get_db
 from app.models.user import User
@@ -36,22 +35,20 @@ Keep responses focused and under 400 words unless a detailed explanation is trul
 async def send_message(
     message: ChatMessageCreate,
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Stream AI response via Server-Sent Events."""
     session_id = message.session_id or str(uuid.uuid4())
 
     # Load recent chat history for context (last 10 messages)
-    history_result = await db.execute(
-        select(ChatMessage)
-        .where(
-            ChatMessage.user_id == current_user.id,
-            ChatMessage.session_id == session_id,
-        )
-        .order_by(desc(ChatMessage.created_at))
-        .limit(10)
-    )
-    history = list(reversed(history_result.scalars().all()))
+    cursor = db.chat_messages.find(
+        {
+            "user_id": str(current_user.id),
+            "session_id": session_id,
+        }
+    ).sort("created_at", -1).limit(10)
+    history_docs = [doc async for doc in cursor]
+    history = [ChatMessage.from_doc(d) for d in reversed(history_docs)]
 
     # Build message list for Groq
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -76,8 +73,7 @@ async def send_message(
         content=message.content,
         session_id=session_id,
     )
-    db.add(user_msg)
-    await db.commit()
+    await db.chat_messages.insert_one(user_msg.to_doc())
 
     async def generate():
         full_response = ""
@@ -89,14 +85,13 @@ async def send_message(
             yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
 
         # Save assistant message
-        async with db.begin():
-            assistant_msg = ChatMessage(
-                user_id=current_user.id,
-                role="assistant",
-                content=full_response,
-                session_id=session_id,
-            )
-            db.add(assistant_msg)
+        assistant_msg = ChatMessage(
+            user_id=current_user.id,
+            role="assistant",
+            content=full_response,
+            session_id=session_id,
+        )
+        await db.chat_messages.insert_one(assistant_msg.to_doc())
 
         yield f"data: {json.dumps({'type': 'done', 'session_id': session_id})}\n\n"
 
@@ -116,13 +111,13 @@ async def get_chat_history(
     session_id: str | None = None,
     limit: int = 50,
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    query = select(ChatMessage).where(ChatMessage.user_id == current_user.id)
+    query = {"user_id": str(current_user.id)}
     if session_id:
-        query = query.where(ChatMessage.session_id == session_id)
-    query = query.order_by(desc(ChatMessage.created_at)).limit(limit)
+        query["session_id"] = session_id
 
-    result = await db.execute(query)
-    messages = list(reversed(result.scalars().all()))
+    cursor = db.chat_messages.find(query).sort("created_at", -1).limit(limit)
+    docs = [doc async for doc in cursor]
+    messages = [ChatMessage.from_doc(d) for d in reversed(docs)]
     return [ChatMessageOut.model_validate(m) for m in messages]

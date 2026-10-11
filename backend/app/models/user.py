@@ -1,32 +1,45 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, Boolean, Text, JSON, func
-from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import UUID
-
-from app.core.database import Base
+from typing import Optional, List, Any
+from pydantic import BaseModel, Field
 
 
-class User(Base):
-    __tablename__ = "users"
+class User(BaseModel):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    name: str
+    email: str
+    hashed_password: str
+    college: Optional[str] = None
+    branch: Optional[str] = None
+    year: Optional[str] = None
+    skills: Optional[List[str]] = Field(default_factory=list)
+    resume_url: Optional[str] = None
+    github_username: Optional[str] = None
+    avatar_url: Optional[str] = None
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    name: Mapped[str] = mapped_column(String(100))
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    hashed_password: Mapped[str] = mapped_column(String(255))
-    college: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    branch: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    year: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    skills: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    resume_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    github_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    model_config = {"from_attributes": True}
+
+    def to_doc(self) -> dict:
+        """Convert model instance to MongoDB document dict."""
+        data = self.model_dump()
+        data["_id"] = str(self.id)
+        data["id"] = str(self.id)
+        return data
+
+    @classmethod
+    def from_doc(cls, doc: Any) -> Optional["User"]:
+        """Construct User instance from MongoDB document dict."""
+        if not doc:
+            return None
+        doc_copy = dict(doc)
+        if "id" not in doc_copy and "_id" in doc_copy:
+            doc_copy["id"] = doc_copy["_id"]
+        if isinstance(doc_copy.get("id"), str):
+            try:
+                doc_copy["id"] = uuid.UUID(doc_copy["id"])
+            except ValueError:
+                pass
+        return cls(**doc_copy)

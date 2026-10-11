@@ -1,45 +1,75 @@
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase
-
+"""
+SkillBridge AI — MongoDB Database Connection & Manager using Motor.
+"""
+from typing import Optional
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from app.core.config import settings
 
-engine_kwargs = {
-    "echo": settings.DEBUG,
-}
-
-if settings.DATABASE_URL.startswith("sqlite"):
-    engine = create_async_engine(
-        settings.DATABASE_URL,
-        **engine_kwargs,
-        connect_args={"check_same_thread": False},
-    )
-else:
-    engine = create_async_engine(
-        settings.DATABASE_URL,
-        **engine_kwargs,
-        pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=20,
-    )
-
-AsyncSessionLocal = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+# Global client and database instances
+client: Optional[AsyncIOMotorClient] = None
+db: Optional[AsyncIOMotorDatabase] = None
 
 
-class Base(DeclarativeBase):
-    pass
+def get_mongo_client() -> AsyncIOMotorClient:
+    """Get or create the Motor client singleton."""
+    global client
+    if client is None:
+        client = AsyncIOMotorClient(settings.MONGODB_URL)
+    return client
 
 
-async def get_db() -> AsyncSession:
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
-        finally:
-            await session.close()
+def get_database() -> AsyncIOMotorDatabase:
+    """Get or create the Motor database singleton."""
+    global db
+    if db is None:
+        c = get_mongo_client()
+        db = c[settings.MONGODB_DB_NAME]
+    return db
+
+
+async def get_db() -> AsyncIOMotorDatabase:
+    """
+    FastAPI dependency that returns the active MongoDB database instance.
+    """
+    return get_database()
+
+
+async def connect_to_mongo():
+    """
+    Connect to MongoDB and ensure indexes for optimal query performance.
+    """
+    global client, db
+    client = AsyncIOMotorClient(settings.MONGODB_URL)
+    db = client[settings.MONGODB_DB_NAME]
+
+    # Create indexes for collections
+    try:
+        await db.users.create_index("email", unique=True)
+        await db.users.create_index("id", unique=True)
+        await db.resumes.create_index("id", unique=True)
+        await db.resumes.create_index("user_id")
+        await db.resumes.create_index([("user_id", 1), ("created_at", -1)])
+        await db.chat_messages.create_index("id", unique=True)
+        await db.chat_messages.create_index("user_id")
+        await db.chat_messages.create_index([("user_id", 1), ("session_id", 1), ("created_at", -1)])
+        await db.roadmaps.create_index("id", unique=True)
+        await db.roadmaps.create_index("user_id")
+        await db.github_analyses.create_index("id", unique=True)
+        await db.github_analyses.create_index("user_id")
+        await db.learning_progress.create_index("id", unique=True)
+        await db.learning_progress.create_index("user_id")
+        await db.interview_sessions.create_index("id", unique=True)
+        await db.interview_sessions.create_index("user_id")
+    except Exception as e:
+        print(f"Warning: Index creation error (may occur if MongoDB is offline or in mock mode): {e}")
+
+
+async def close_mongo_connection():
+    """
+    Close MongoDB client connections gracefully.
+    """
+    global client, db
+    if client is not None:
+        client.close()
+        client = None
+        db = None

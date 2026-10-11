@@ -1,39 +1,58 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, Float, Text, JSON, ForeignKey, func
-from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import UUID
-
-from app.core.database import Base
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field
 
 
-class Resume(Base):
-    __tablename__ = "resumes"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
-    filename: Mapped[str] = mapped_column(String(255))
-    file_path: Mapped[str] = mapped_column(Text)
-    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+class Resume(BaseModel):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    user_id: uuid.UUID
+    filename: str
+    file_path: str
+    raw_text: Optional[str] = None
 
     # Analysis results
-    resume_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    ats_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    strong_skills: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    weak_skills: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    grammar_issues: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    formatting_suggestions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    missing_keywords: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    improvement_tips: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    experience_years: Mapped[float | None] = mapped_column(Float, nullable=True)
-    education: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    projects_detected: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    full_analysis: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    resume_score: Optional[float] = None
+    ats_score: Optional[float] = None
+    strong_skills: Optional[List[str]] = None
+    weak_skills: Optional[List[str]] = None
+    grammar_issues: Optional[List[str]] = None
+    formatting_suggestions: Optional[List[str]] = None
+    missing_keywords: Optional[List[str]] = None
+    improvement_tips: Optional[List[str]] = None
+    experience_years: Optional[float] = None
+    education: Optional[Dict[str, Any]] = None
+    projects_detected: Optional[List[Any]] = None
+    full_analysis: Optional[Dict[str, Any]] = None
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = {"from_attributes": True}
+
+    def to_doc(self) -> dict:
+        """Convert model instance to MongoDB document dict."""
+        data = self.model_dump()
+        data["_id"] = str(self.id)
+        data["id"] = str(self.id)
+        data["user_id"] = str(self.user_id)
+        return data
+
+    @classmethod
+    def from_doc(cls, doc: Any) -> Optional["Resume"]:
+        """Construct Resume instance from MongoDB document dict."""
+        if not doc:
+            return None
+        doc_copy = dict(doc)
+        if "id" not in doc_copy and "_id" in doc_copy:
+            doc_copy["id"] = doc_copy["_id"]
+        if isinstance(doc_copy.get("id"), str):
+            try:
+                doc_copy["id"] = uuid.UUID(doc_copy["id"])
+            except ValueError:
+                pass
+        if isinstance(doc_copy.get("user_id"), str):
+            try:
+                doc_copy["user_id"] = uuid.UUID(doc_copy["user_id"])
+            except ValueError:
+                pass
+        return cls(**doc_copy)

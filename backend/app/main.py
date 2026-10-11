@@ -10,9 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
-from app.core.database import engine, Base
+from app.core.database import connect_to_mongo, close_mongo_connection, get_database
 
-# Import all models so Alembic/SQLAlchemy can see them
+# Import all models
 from app.models import User, Resume, ChatMessage, Roadmap, GitHubAnalysis, LearningProgress, InterviewSession  # noqa
 
 # Import routers
@@ -34,11 +34,11 @@ from app.api.routers.phase3 import router as phase3_router
 async def lifespan(app: FastAPI):
     # Create upload directory
     Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
-    # Create all tables (dev convenience — use Alembic for production)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Initialize MongoDB connection & indexes
+    await connect_to_mongo()
     yield
-    await engine.dispose()
+    # Gracefully close MongoDB connections
+    await close_mongo_connection()
 
 
 app = FastAPI(
@@ -75,10 +75,19 @@ app.include_router(phase3_router, prefix=API_PREFIX)
 
 @app.get("/api/health")
 async def health_check():
+    mongo_status = "connected"
+    try:
+        db = get_database()
+        await db.command("ping")
+    except Exception as e:
+        mongo_status = f"unavailable: {e}"
+
     return {
-        "status": "healthy",
+        "status": "healthy" if "unavailable" not in mongo_status else "degraded",
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
+        "database": "mongodb",
+        "mongodb_status": mongo_status,
         "groq_configured": bool(settings.GROQ_API_KEY),
     }
 

@@ -1,11 +1,10 @@
 """
-Phase 3 Routers: Portfolio Reviewer, Cover Letter Generator, LinkedIn Post Generator, and RAG Resume Q&A.
+Phase 3 Routers: Portfolio Reviewer, Cover Letter Generator, LinkedIn Post Generator, and RAG Resume Q&A using MongoDB.
 """
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.database import get_db
 from app.models.user import User
@@ -55,10 +54,9 @@ async def review_portfolio(
 async def generate_cover_letter(
     data: CoverLetterRequest,
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Generate a tailored cover letter based on user profile & target job."""
-    # Get user skills
     skills_str = ", ".join(current_user.skills) if current_user.skills else "Software Engineering"
 
     prompt = f"""Write a professional, compelling 3-paragraph Cover Letter for a student applying for:
@@ -107,13 +105,17 @@ Use relevant hashtags, line breaks for readability, and a call-to-action asking 
 async def rag_chat_resume(
     data: RAGQueryRequest,
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Perform RAG search over the user's uploaded resume to answer specific questions."""
-    result = await db.execute(
-        select(Resume).where(Resume.user_id == current_user.id).order_by(desc(Resume.created_at)).limit(1)
+    doc = await db.resumes.find_one(
+        {"user_id": str(current_user.id)},
+        sort=[("created_at", -1)]
     )
-    resume = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Please upload a resume first to use RAG Q&A.")
+
+    resume = Resume.from_doc(doc)
     if not resume or not resume.raw_text:
         raise HTTPException(status_code=404, detail="Please upload a resume first to use RAG Q&A.")
 

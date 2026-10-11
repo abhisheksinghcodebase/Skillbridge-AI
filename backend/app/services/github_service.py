@@ -14,15 +14,21 @@ GITHUB_API = "https://api.github.com"
 
 async def fetch_github_data(username: str) -> dict:
     """Fetch public GitHub profile data."""
-    headers = {"Accept": "application/vnd.github.v3+json"}
+    headers = {"Accept": "application/vnd.github+json"}
     if settings.GITHUB_TOKEN:
-        headers["Authorization"] = f"token {settings.GITHUB_TOKEN}"
+        headers["Authorization"] = f"Bearer {settings.GITHUB_TOKEN}"
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         # Fetch user profile
         user_resp = await client.get(f"{GITHUB_API}/users/{username}", headers=headers)
-        if user_resp.status_code != 200:
+        if user_resp.status_code == 401:
+            return {"error": "GitHub token is invalid or expired. Update GITHUB_TOKEN."}
+        if user_resp.status_code == 403:
+            return {"error": "GitHub API rate limit exceeded or access was denied."}
+        if user_resp.status_code == 404:
             return {"error": f"GitHub user '{username}' not found"}
+        if user_resp.status_code != 200:
+            return {"error": f"GitHub API request failed with status {user_resp.status_code}"}
 
         user = user_resp.json()
 
@@ -32,6 +38,8 @@ async def fetch_github_data(username: str) -> dict:
             headers=headers,
             params={"sort": "stars", "per_page": 30, "type": "owner"},
         )
+        if repos_resp.status_code == 403:
+            return {"error": "GitHub API rate limit exceeded or access was denied while loading repositories."}
         repos = repos_resp.json() if repos_resp.status_code == 200 else []
 
         return {"user": user, "repos": repos}

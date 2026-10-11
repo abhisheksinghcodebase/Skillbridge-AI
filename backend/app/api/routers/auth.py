@@ -1,41 +1,25 @@
 """
-Auth router: register, login, get current user.
+Auth router: register, login, get current user using MongoDB.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+import uuid
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, Security, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.database import get_db
-from app.core.security import verify_password, get_password_hash, create_access_token
+from app.core.security import verify_password, get_password_hash, create_access_token, decode_token
 from app.models.user import User
 from app.schemas.user import UserCreate, UserOut, Token, LoginRequest, UserUpdate
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-async def get_current_user(
-    token: str = Depends(lambda: None),
-    db: AsyncSession = Depends(get_db),
-) -> User:
-    from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-    from fastapi import Request
-    raise HTTPException(status_code=401, detail="Not authenticated")
-
-
-# Proper dependency using HTTPBearer
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi import Security
-from app.core.security import decode_token
-
 security = HTTPBearer()
 
 
 async def get_current_user_dep(
     credentials: HTTPAuthorizationCredentials = Security(security),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ) -> User:
-    import uuid
-    
     token = credentials.credentials
     payload = decode_token(token)
     if not payload:
@@ -45,24 +29,28 @@ async def get_current_user_dep(
     if not user_id_str:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    # Convert string UUID back to UUID object
+    # Validate UUID format
     try:
-        user_id = uuid.UUID(user_id_str)
+        uuid.UUID(user_id_str)
     except (ValueError, AttributeError):
         raise HTTPException(status_code=401, detail="Invalid user ID format")
 
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
+    doc = await db.users.find_one({"id": user_id_str})
+    if not doc:
+        # Fallback to _id check
+        doc = await db.users.find_one({"_id": user_id_str})
+
+    user = User.from_doc(doc)
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found or inactive")
     return user
 
 
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
-async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
+async def register(user_data: UserCreate, db: AsyncIOMotorDatabase = Depends(get_db)):
     # Check email uniqueness
-    result = await db.execute(select(User).where(User.email == user_data.email))
-    if result.scalar_one_or_none():
+    existing_user = await db.users.find_one({"email": user_data.email})
+    if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
     user = User(
@@ -74,18 +62,16 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
         year=user_data.year,
         skills=user_data.skills or [],
     )
-    db.add(user)
-    await db.flush()
-    await db.refresh(user)
+    await db.users.insert_one(user.to_doc())
 
     token = create_access_token({"sub": str(user.id)})
     return Token(access_token=token, user=UserOut.model_validate(user))
 
 
 @router.post("/login", response_model=Token)
-async def login(credentials: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == credentials.email))
-    user = result.scalar_one_or_none()
+async def login(credentials: LoginRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
+    doc = await db.users.find_one({"email": credentials.email})
+    user = User.from_doc(doc)
 
     if not user or not verify_password(credentials.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -103,10 +89,15 @@ async def get_me(current_user: User = Depends(get_current_user_dep)):
 async def update_me(
     update_data: UserUpdate,
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    for field, value in update_data.model_dump(exclude_none=True).items():
-        setattr(current_user, field, value)
-    await db.flush()
-    await db.refresh(current_user)
+    update_fields = update_data.model_dump(exclude_none=True)
+    if update_fields:
+        for field, value in update_fields.items():
+            setattr(current_user, field, value)
+        current_user.updated_at = datetime.utcnow()
+        await db.users.update_one(
+            {"id": str(current_user.id)},
+            {"$set": current_user.to_doc()}
+        )
     return UserOut.model_validate(current_user)

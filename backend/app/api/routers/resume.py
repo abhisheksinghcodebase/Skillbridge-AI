@@ -1,10 +1,8 @@
 """
-Resume router: upload, analyze, history.
+Resume router: upload, analyze, history using MongoDB.
 """
-import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.database import get_db
 from app.models.user import User
@@ -23,7 +21,7 @@ MAX_SIZE = 10 * 1024 * 1024  # 10 MB
 async def upload_resume(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     # Validate file
     if not file.filename.lower().endswith(".pdf"):
@@ -42,7 +40,7 @@ async def upload_resume(
     # AI Analysis
     analysis = await analyze_resume(raw_text)
 
-    # Store in DB
+    # Store in MongoDB
     resume = Resume(
         user_id=current_user.id,
         filename=file.filename,
@@ -61,38 +59,32 @@ async def upload_resume(
         projects_detected=analysis.get("projects_detected"),
         full_analysis=analysis,
     )
-    db.add(resume)
-    await db.flush()
-    await db.refresh(resume)
+    await db.resumes.insert_one(resume.to_doc())
     return ResumeOut.model_validate(resume)
 
 
 @router.get("/latest", response_model=ResumeOut)
 async def get_latest_resume(
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Resume)
-        .where(Resume.user_id == current_user.id)
-        .order_by(desc(Resume.created_at))
-        .limit(1)
+    doc = await db.resumes.find_one(
+        {"user_id": str(current_user.id)},
+        sort=[("created_at", -1)]
     )
-    resume = result.scalar_one_or_none()
-    if not resume:
+    if not doc:
         raise HTTPException(status_code=404, detail="No resume found")
+    resume = Resume.from_doc(doc)
     return ResumeOut.model_validate(resume)
 
 
 @router.get("/history", response_model=list[ResumeOut])
 async def get_resume_history(
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Resume)
-        .where(Resume.user_id == current_user.id)
-        .order_by(desc(Resume.created_at))
-        .limit(10)
-    )
-    return [ResumeOut.model_validate(r) for r in result.scalars().all()]
+    cursor = db.resumes.find(
+        {"user_id": str(current_user.id)}
+    ).sort("created_at", -1).limit(10)
+    docs = [doc async for doc in cursor]
+    return [ResumeOut.model_validate(Resume.from_doc(d)) for d in docs]

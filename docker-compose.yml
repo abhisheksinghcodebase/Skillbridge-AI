@@ -1,19 +1,18 @@
 version: "3.9"
 
 services:
-  db:
-    image: postgres:16-alpine
-    container_name: skillbridge_postgres
-    environment:
-      POSTGRES_USER: skillbridge
-      POSTGRES_PASSWORD: skillbridge123
-      POSTGRES_DB: skillbridge_db
+  mongodb:
+    image: mongo:7.0
+    container_name: skillbridge_mongodb
+    restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: skillbridge_db
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mongodb_data:/data/db
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U skillbridge -d skillbridge_db"]
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
       interval: 10s
       timeout: 5s
       retries: 5
@@ -28,13 +27,14 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://skillbridge:skillbridge123@db:5432/skillbridge_db
+      MONGODB_URL: mongodb://mongodb:27017
+      MONGODB_DB_NAME: skillbridge_db
     volumes:
       - ./backend:/app
       - uploads_data:/app/uploads
       - chroma_data:/app/chroma_data
     depends_on:
-      db:
+      mongodb:
         condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
@@ -52,6 +52,6 @@ services:
     command: npm run dev
 
 volumes:
-  postgres_data:
+  mongodb_data:
   uploads_data:
   chroma_data:

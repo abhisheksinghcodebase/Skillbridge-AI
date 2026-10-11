@@ -1,11 +1,11 @@
 """
-Roadmap, Projects, GitHub, Interview, Jobs, and Tracker routers.
+Roadmap, Projects, GitHub, Interview, Jobs, and Tracker routers using MongoDB.
 """
+from datetime import datetime
 import json
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.database import get_db
 from app.models.user import User
@@ -31,7 +31,7 @@ roadmap_router = APIRouter(prefix="/roadmap", tags=["roadmap"])
 async def create_roadmap(
     data: RoadmapCreate,
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     skills = data.current_skills or current_user.skills or []
     roadmap_data = await generate_roadmap(data.goal, skills)
@@ -42,21 +42,18 @@ async def create_roadmap(
         roadmap_data=roadmap_data,
         progress={},
     )
-    db.add(roadmap)
-    await db.flush()
-    await db.refresh(roadmap)
+    await db.roadmaps.insert_one(roadmap.to_doc())
     return RoadmapOut.model_validate(roadmap)
 
 
 @roadmap_router.get("/", response_model=list[RoadmapOut])
 async def list_roadmaps(
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Roadmap).where(Roadmap.user_id == current_user.id).order_by(desc(Roadmap.created_at))
-    )
-    return [RoadmapOut.model_validate(r) for r in result.scalars().all()]
+    cursor = db.roadmaps.find({"user_id": str(current_user.id)}).sort("created_at", -1)
+    docs = [doc async for doc in cursor]
+    return [RoadmapOut.model_validate(Roadmap.from_doc(r)) for r in docs]
 
 
 @roadmap_router.put("/{roadmap_id}/progress", response_model=RoadmapOut)
@@ -64,20 +61,24 @@ async def update_roadmap_progress(
     roadmap_id: uuid.UUID,
     update: RoadmapProgressUpdate,
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Roadmap).where(Roadmap.id == roadmap_id, Roadmap.user_id == current_user.id)
+    doc = await db.roadmaps.find_one(
+        {"id": str(roadmap_id), "user_id": str(current_user.id)}
     )
-    roadmap = result.scalar_one_or_none()
-    if not roadmap:
+    if not doc:
         raise HTTPException(status_code=404, detail="Roadmap not found")
 
+    roadmap = Roadmap.from_doc(doc)
     progress = dict(roadmap.progress or {})
     progress[update.node_id] = update.completed
     roadmap.progress = progress
-    await db.flush()
-    await db.refresh(roadmap)
+    roadmap.updated_at = datetime.utcnow()
+
+    await db.roadmaps.update_one(
+        {"id": str(roadmap_id)},
+        {"$set": {"progress": progress, "updated_at": roadmap.updated_at}}
+    )
     return RoadmapOut.model_validate(roadmap)
 
 
@@ -150,25 +151,80 @@ def _mock_projects():
             },
             {
                 "id": 2,
-                "title": "Real-Time Chat Application",
-                "description": "WebSocket-based chat app with rooms, authentication, and message history.",
-                "difficulty": "intermediate",
-                "estimated_days": 10,
-                "tech_stack": ["Node.js", "Socket.io", "React", "MongoDB"],
-                "learning_outcomes": ["WebSockets", "State management", "Database design"],
-                "github_starter": "https://github.com/search?q=socket.io+chat+app",
-                "tags": ["backend", "realtime", "fullstack"],
+                "title": "DevPortfolio CMS",
+                "description": "A headless CMS for developer portfolios with markdown support and GitHub integration.",
+                "difficulty": "beginner",
+                "estimated_days": 7,
+                "tech_stack": ["Next.js", "Tailwind CSS", "MongoDB"],
+                "learning_outcomes": ["SSR/SSG", "Database modeling", "Auth"],
+                "github_starter": "https://github.com/search?q=portfolio+cms+nextjs",
+                "tags": ["web", "frontend", "fullstack"],
             },
             {
                 "id": 3,
-                "title": "Personal Finance Tracker",
-                "description": "Track income and expenses with charts, categories, and monthly reports.",
+                "title": "Smart Job Application Tracker",
+                "description": "Kanban board app to track job applications with salary insights and interview reminders.",
+                "difficulty": "intermediate",
+                "estimated_days": 10,
+                "tech_stack": ["React", "FastAPI", "MongoDB"],
+                "learning_outcomes": ["Drag and drop UI", "Relational design", "Email alerts"],
+                "github_starter": "https://github.com/search?q=job+tracker+react",
+                "tags": ["web", "productivity"],
+            },
+            {
+                "id": 4,
+                "title": "Real-time Coding Interview Platform",
+                "description": "Collaborative code editor with WebRTC video calling and syntax highlighting.",
+                "difficulty": "advanced",
+                "estimated_days": 21,
+                "tech_stack": ["Node.js", "WebSockets", "Monaco Editor", "Docker"],
+                "learning_outcomes": ["WebSockets", "Sandboxed execution", "WebRTC"],
+                "github_starter": "https://github.com/search?q=collaborative+editor+webrtc",
+                "tags": ["advanced", "systems", "web"],
+            },
+            {
+                "id": 5,
+                "title": "GitHub Profile Readme Generator",
+                "description": "Interactive CLI + Web tool to generate dynamic GitHub profile readmes with live stats.",
                 "difficulty": "beginner",
-                "estimated_days": 7,
-                "tech_stack": ["React", "Chart.js", "LocalStorage / Firebase"],
-                "learning_outcomes": ["Data visualization", "CRUD operations", "State management"],
-                "github_starter": "https://github.com/search?q=finance+tracker+react",
-                "tags": ["frontend", "beginner-friendly"],
+                "estimated_days": 5,
+                "tech_stack": ["TypeScript", "GitHub API", "Vercel"],
+                "learning_outcomes": ["API consumption", "SVG generation", "Deployments"],
+                "github_starter": "https://github.com/search?q=github+profile+readme+generator",
+                "tags": ["tools", "open-source"],
+            },
+            {
+                "id": 6,
+                "title": "Distributed Task Queue",
+                "description": "Lightweight Redis-backed background worker system in Python with retry logic.",
+                "difficulty": "advanced",
+                "estimated_days": 18,
+                "tech_stack": ["Python", "Redis", "Asyncio"],
+                "learning_outcomes": ["Concurrency", "Distributed systems", "Fault tolerance"],
+                "github_starter": "https://github.com/search?q=python+task+queue",
+                "tags": ["backend", "systems"],
+            },
+            {
+                "id": 7,
+                "title": "Algorithm Visualizer",
+                "description": "Interactive visualizer for graph algorithms, dynamic programming, and sorting.",
+                "difficulty": "intermediate",
+                "estimated_days": 12,
+                "tech_stack": ["React", "D3.js", "Tailwind CSS"],
+                "learning_outcomes": ["Data structures", "D3 animations", "Complex state"],
+                "github_starter": "https://github.com/search?q=algorithm+visualizer+react",
+                "tags": ["dsa", "frontend", "education"],
+            },
+            {
+                "id": 8,
+                "title": "Microservices E-Commerce API",
+                "description": "Event-driven backend with Auth, Catalog, Cart, and Order microservices.",
+                "difficulty": "advanced",
+                "estimated_days": 25,
+                "tech_stack": ["FastAPI", "MongoDB", "RabbitMQ", "Docker"],
+                "learning_outcomes": ["Microservices", "Event-driven architecture", "API Gateway"],
+                "github_starter": "https://github.com/search?q=microservices+fastapi",
+                "tags": ["backend", "cloud", "advanced"],
             },
         ]
     }
@@ -182,7 +238,7 @@ github_router = APIRouter(prefix="/github", tags=["github"])
 async def analyze_github(
     data: GitHubAnalysisRequest,
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     analysis_data = await analyze_github_profile(data.github_username)
     if "error" in analysis_data:
@@ -193,24 +249,20 @@ async def analyze_github(
         github_username=data.github_username,
         analysis_data=analysis_data,
     )
-    db.add(analysis)
-    await db.flush()
-    await db.refresh(analysis)
+    await db.github_analyses.insert_one(analysis.to_doc())
     return GitHubAnalysisOut.model_validate(analysis)
 
 
 @github_router.get("/history", response_model=list[GitHubAnalysisOut])
 async def github_history(
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    result = await db.execute(
-        select(GitHubAnalysis)
-        .where(GitHubAnalysis.user_id == current_user.id)
-        .order_by(desc(GitHubAnalysis.created_at))
-        .limit(5)
-    )
-    return [GitHubAnalysisOut.model_validate(a) for a in result.scalars().all()]
+    cursor = db.github_analyses.find(
+        {"user_id": str(current_user.id)}
+    ).sort("created_at", -1).limit(5)
+    docs = [doc async for doc in cursor]
+    return [GitHubAnalysisOut.model_validate(GitHubAnalysis.from_doc(a)) for a in docs]
 
 
 # ────────────────────────── INTERVIEW ──────────────────────────
@@ -241,7 +293,7 @@ Return JSON:
 async def get_interview_question(
     data: InterviewRequest,
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     try:
         response = await groq_service.chat_completion(
@@ -264,9 +316,7 @@ async def get_interview_question(
         topic=data.topic,
         question=question_text,
     )
-    db.add(session)
-    await db.flush()
-    await db.refresh(session)
+    await db.interview_sessions.insert_one(session.to_doc())
     return InterviewSessionOut.model_validate(session)
 
 
@@ -274,17 +324,16 @@ async def get_interview_question(
 async def evaluate_answer(
     data: InterviewEvaluateRequest,
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    result = await db.execute(
-        select(InterviewSession).where(
-            InterviewSession.id == data.session_id,
-            InterviewSession.user_id == current_user.id,
-        )
-    )
-    session = result.scalar_one_or_none()
-    if not session:
+    doc = await db.interview_sessions.find_one({
+        "id": str(data.session_id),
+        "user_id": str(current_user.id),
+    })
+    if not doc:
         raise HTTPException(status_code=404, detail="Interview session not found")
+
+    session = InterviewSession.from_doc(doc)
 
     try:
         response = await groq_service.chat_completion(
@@ -304,23 +353,28 @@ async def evaluate_answer(
     session.answer = data.answer
     session.feedback = feedback
     session.score = feedback.get("score", 70)
-    await db.flush()
-    await db.refresh(session)
+
+    await db.interview_sessions.update_one(
+        {"id": str(data.session_id)},
+        {"$set": {
+            "answer": session.answer,
+            "feedback": session.feedback,
+            "score": session.score,
+        }}
+    )
     return InterviewSessionOut.model_validate(session)
 
 
 @interview_router.get("/history", response_model=list[InterviewSessionOut])
 async def interview_history(
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    result = await db.execute(
-        select(InterviewSession)
-        .where(InterviewSession.user_id == current_user.id)
-        .order_by(desc(InterviewSession.created_at))
-        .limit(20)
-    )
-    return [InterviewSessionOut.model_validate(s) for s in result.scalars().all()]
+    cursor = db.interview_sessions.find(
+        {"user_id": str(current_user.id)}
+    ).sort("created_at", -1).limit(20)
+    docs = [doc async for doc in cursor]
+    return [InterviewSessionOut.model_validate(InterviewSession.from_doc(s)) for s in docs]
 
 
 # ────────────────────────── TRACKER ──────────────────────────
@@ -330,19 +384,18 @@ tracker_router = APIRouter(prefix="/tracker", tags=["tracker"])
 @tracker_router.get("/", response_model=list[LearningProgressOut])
 async def get_progress(
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    result = await db.execute(
-        select(LearningProgress).where(LearningProgress.user_id == current_user.id)
-    )
-    return [LearningProgressOut.model_validate(p) for p in result.scalars().all()]
+    cursor = db.learning_progress.find({"user_id": str(current_user.id)})
+    docs = [doc async for doc in cursor]
+    return [LearningProgressOut.model_validate(LearningProgress.from_doc(p)) for p in docs]
 
 
 @tracker_router.post("/", response_model=LearningProgressOut, status_code=201)
 async def add_skill(
     data: LearningProgressCreate,
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     progress = LearningProgress(
         user_id=current_user.id,
@@ -352,9 +405,7 @@ async def add_skill(
         status=data.status,
         notes=data.notes,
     )
-    db.add(progress)
-    await db.flush()
-    await db.refresh(progress)
+    await db.learning_progress.insert_one(progress.to_doc())
     return LearningProgressOut.model_validate(progress)
 
 
@@ -363,22 +414,24 @@ async def update_skill_progress(
     progress_id: uuid.UUID,
     data: LearningProgressCreate,
     current_user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    result = await db.execute(
-        select(LearningProgress).where(
-            LearningProgress.id == progress_id,
-            LearningProgress.user_id == current_user.id,
-        )
-    )
-    progress = result.scalar_one_or_none()
-    if not progress:
+    doc = await db.learning_progress.find_one({
+        "id": str(progress_id),
+        "user_id": str(current_user.id),
+    })
+    if not doc:
         raise HTTPException(status_code=404, detail="Skill not found")
 
+    progress = LearningProgress.from_doc(doc)
     for field, value in data.model_dump().items():
         setattr(progress, field, value)
-    await db.flush()
-    await db.refresh(progress)
+    progress.updated_at = datetime.utcnow()
+
+    await db.learning_progress.update_one(
+        {"id": str(progress_id)},
+        {"$set": progress.to_doc()}
+    )
     return LearningProgressOut.model_validate(progress)
 
 
@@ -456,11 +509,59 @@ def _mock_jobs():
                 "company_type": "Mid-size",
                 "match_percent": 75,
                 "salary_range": "₹6-10 LPA",
-                "required_skills": ["Python", "FastAPI", "PostgreSQL"],
+                "required_skills": ["Python", "FastAPI", "MongoDB"],
                 "missing_skills": ["Redis", "Celery"],
                 "reasons": ["Python proficiency", "API development skills"],
                 "apply_platforms": ["LinkedIn", "Naukri"],
                 "location": "Hybrid - Bangalore",
+            },
+            {
+                "id": 3,
+                "title": "AI/ML Engineer Trainee",
+                "company_type": "Enterprise",
+                "match_percent": 70,
+                "salary_range": "₹8-14 LPA",
+                "required_skills": ["Python", "PyTorch", "NLP", "FastAPI"],
+                "missing_skills": ["MLOps", "Kubernetes"],
+                "reasons": ["AI interest aligned", "Strong foundation"],
+                "apply_platforms": ["LinkedIn", "Company Portal"],
+                "location": "Bangalore / Hyderabad",
+            },
+            {
+                "id": 4,
+                "title": "Frontend Engineer (React)",
+                "company_type": "Startup",
+                "match_percent": 88,
+                "salary_range": "₹6-9 LPA",
+                "required_skills": ["React", "TypeScript", "Tailwind CSS", "Next.js"],
+                "missing_skills": ["GraphQL"],
+                "reasons": ["High skill match on React & modern frontend stack"],
+                "apply_platforms": ["Wellfound", "LinkedIn"],
+                "location": "Remote",
+            },
+            {
+                "id": 5,
+                "title": "Associate Cloud / DevOps Engineer",
+                "company_type": "Mid-size",
+                "match_percent": 65,
+                "salary_range": "₹5-7 LPA",
+                "required_skills": ["Linux", "Docker", "Git", "CI/CD"],
+                "missing_skills": ["Terraform", "Kubernetes"],
+                "reasons": ["Good basics, high learning potential"],
+                "apply_platforms": ["Naukri", "LinkedIn"],
+                "location": "Pune / Gurgaon",
+            },
+            {
+                "id": 6,
+                "title": "Software Development Engineer (Fresher)",
+                "company_type": "Enterprise",
+                "match_percent": 78,
+                "salary_range": "₹7-12 LPA",
+                "required_skills": ["DSA", "Java or Python", "DBMS", "System Design Basics"],
+                "missing_skills": ["System Design in depth"],
+                "reasons": ["Solid CS fundamentals", "Good problem solving"],
+                "apply_platforms": ["Campus / Off-campus portal"],
+                "location": "PAN India",
             },
         ]
     }
